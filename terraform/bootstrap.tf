@@ -1,5 +1,9 @@
 terraform {
   required_version = ">= 0.12"
+  backend "s3" {
+    region = "us-east-1"
+    bucket = "terraform-790055257995"
+  }
 }
 
 provider "aws" {
@@ -10,6 +14,10 @@ provider "github" {
   version      = "2.4.0" # Personal account webhooks broken in 2.5
   token        = var.github_token
   organization = var.github_user
+}
+
+data "aws_s3_bucket" "artifacts_s3_bucket" {
+  bucket = "ci-artifacts-790055257995"
 }
 
 variable "aws_region" {
@@ -41,7 +49,7 @@ resource "aws_codepipeline" "codepipeline" {
   role_arn = aws_iam_role.codepipeline_role.arn
 
   artifact_store {
-    location = aws_s3_bucket.artifact_s3_bucket.bucket
+    location = data.aws_s3_bucket.artifacts_s3_bucket.bucket
     type     = "S3"
   }
 
@@ -73,8 +81,8 @@ resource "aws_codepipeline" "codepipeline" {
       category        = "Build"
       owner           = "AWS"
       provider        = "CodeBuild"
-      input_artifacts = [format("output_%s", var.application_name)]
       version         = "1"
+      input_artifacts = [format("output_%s", var.application_name)]
 
       configuration = {
         ProjectName = aws_codebuild_project.codebuild_project.name
@@ -129,7 +137,7 @@ resource "aws_codebuild_project" "codebuild_project" {
 
     environment_variable {
       name  = "ARTIFACT_S3_BUCKET"
-      value = aws_s3_bucket.artifact_s3_bucket.bucket
+      value = data.aws_s3_bucket.artifacts_s3_bucket.bucket
     }
   }
 
@@ -169,7 +177,7 @@ resource "aws_iam_role_policy" "codepipeline_policy" {
     {
       "Effect": "Allow",
       "Action": [ "s3:GetBucketVersioning" ],
-      "Resource": [ "${aws_s3_bucket.artifact_s3_bucket.arn}" ]
+      "Resource": [ "${data.aws_s3_bucket.artifacts_s3_bucket.arn}" ]
     },
     {
       "Effect":"Allow",
@@ -178,7 +186,7 @@ resource "aws_iam_role_policy" "codepipeline_policy" {
         "s3:GetObjectVersion",
         "s3:PutObject"
       ],
-      "Resource": [ "${aws_s3_bucket.artifact_s3_bucket.arn}/*" ]
+      "Resource": [ "${data.aws_s3_bucket.artifacts_s3_bucket.arn}/*" ]
     },
     {
       "Effect": "Allow",
@@ -229,9 +237,4 @@ resource "aws_iam_role" "codebuild_role" {
   ]
 }
 EOF
-}
-
-resource "aws_s3_bucket" "artifact_s3_bucket" {
-  bucket = "ci-artifact-s3-bucket"
-  acl    = "private"
 }
