@@ -44,6 +44,10 @@ variable "github_token" {
   type = string
 }
 
+variable "build_image" {
+  type = string
+}
+
 resource "aws_codepipeline" "codepipeline" {
   name     = var.application_name
   role_arn = aws_iam_role.codepipeline_role.arn
@@ -62,13 +66,14 @@ resource "aws_codepipeline" "codepipeline" {
       owner            = "ThirdParty"
       provider         = "GitHub"
       version          = "1"
-      output_artifacts = [format("output_%s", var.application_name)]
+      output_artifacts = ["source"]
 
       configuration = {
-        Owner      = var.github_user
-        Repo       = var.github_repository
-        Branch     = var.github_branch
-        OAuthToken = var.github_token
+        Owner                = var.github_user
+        Repo                 = var.github_repository
+        Branch               = var.github_branch
+        OAuthToken           = var.github_token
+        PollForSourceChanges = false
       }
     }
   }
@@ -77,12 +82,13 @@ resource "aws_codepipeline" "codepipeline" {
     name = "Build"
 
     action {
-      name            = "Build"
-      category        = "Build"
-      owner           = "AWS"
-      provider        = "CodeBuild"
-      version         = "1"
-      input_artifacts = [format("output_%s", var.application_name)]
+      name             = "Build"
+      category         = "Build"
+      owner            = "AWS"
+      provider         = "CodeBuild"
+      version          = "1"
+      input_artifacts  = ["source"]
+      output_artifacts = ["build"]
 
       configuration = {
         ProjectName = aws_codebuild_project.codebuild_project.name
@@ -122,8 +128,8 @@ resource "github_repository_webhook" "github_webhook" {
 
 resource "aws_codebuild_project" "codebuild_project" {
   name          = format("%s-project", var.application_name)
-  build_timeout = "5"
   service_role  = aws_iam_role.codebuild_role.arn
+  build_timeout = "5"
 
   source {
     type = "CODEPIPELINE"
@@ -131,13 +137,17 @@ resource "aws_codebuild_project" "codebuild_project" {
 
   environment {
     compute_type                = "BUILD_GENERAL1_SMALL"
-    image                       = "aws/codebuild/standard:1.0"
+    image                       = var.build_image
     type                        = "LINUX_CONTAINER"
     image_pull_credentials_type = "CODEBUILD"
 
     environment_variable {
       name  = "ARTIFACT_S3_BUCKET"
       value = data.aws_s3_bucket.artifacts_s3_bucket.bucket
+    }
+    environment_variable {
+      name  = "ARTIFACT_S3_KEY"
+      value = var.application_name
     }
   }
 
@@ -233,6 +243,39 @@ resource "aws_iam_role" "codebuild_role" {
         "Service": "codebuild.amazonaws.com"
       },
       "Action": "sts:AssumeRole"
+    }
+  ]
+}
+EOF
+}
+
+resource "aws_iam_role_policy" "codebuild_policy" {
+  name = format("codebuild-policy-%s", var.application_name)
+  role = aws_iam_role.codebuild_role.id
+
+  policy = <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Resource": [ "*" ],
+      "Action": [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Resource": [
+          "${data.aws_s3_bucket.artifacts_s3_bucket.arn}/${var.application_name}/*"
+      ],
+      "Action": [
+          "s3:GetObject",
+          "s3:GetObjectVersion",
+          "s3:PutObject"
+      ]
     }
   ]
 }
