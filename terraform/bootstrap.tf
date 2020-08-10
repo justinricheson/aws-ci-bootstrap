@@ -95,6 +95,15 @@ resource "aws_codepipeline" "codepipeline" {
       }
     }
   }
+
+  lifecycle {
+    # Terraform seems to store a hashed version of the OAuthToken in the state file.
+    # When updates to the codepipeline are made, the hashed token is used, which breaks
+    # the pipeline. This can be confirmed by using the aws cli to update the pipeline
+    # with the correct OAuthToken, fixing the issue. This is a hack to ignore the changed
+    # token supplied by the aws cli so the broken hashed token doesn't overwrite it.
+    ignore_changes = [stage[0].action[0].configuration]
+  }
 }
 
 resource "aws_codepipeline_webhook" "codepipeline_webhook" {
