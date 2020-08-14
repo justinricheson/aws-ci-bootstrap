@@ -1,8 +1,9 @@
 terraform {
   required_version = ">= 0.12"
   backend "s3" {
-    region = "us-east-1"
-    bucket = "terraform-790055257995"
+    region         = "us-east-1"
+    bucket         = "terraform-790055257995"
+    dynamodb_table = "terraform-lock"
   }
 }
 
@@ -91,7 +92,24 @@ resource "aws_codepipeline" "codepipeline" {
       output_artifacts = ["build"]
 
       configuration = {
-        ProjectName = aws_codebuild_project.codebuild_project.name
+        ProjectName = aws_codebuild_project.build_project.name
+      }
+    }
+  }
+
+  stage {
+    name = "Deploy"
+
+    action {
+      name            = "Build"
+      category        = "Build"
+      owner           = "AWS"
+      provider        = "CodeBuild"
+      version         = "1"
+      input_artifacts = ["build"]
+
+      configuration = {
+        ProjectName = aws_codebuild_project.deploy_project.name
       }
     }
   }
@@ -135,8 +153,29 @@ resource "github_repository_webhook" "github_webhook" {
   events = ["push"]
 }
 
-resource "aws_codebuild_project" "codebuild_project" {
-  name          = format("%s-project", var.application_name)
+resource "aws_codebuild_project" "build_project" {
+  name          = format("%s-build-project", var.application_name)
+  service_role  = aws_iam_role.codebuild_role.arn
+  build_timeout = "5"
+
+  source {
+    type = "CODEPIPELINE"
+  }
+
+  environment {
+    compute_type                = "BUILD_GENERAL1_SMALL"
+    image                       = var.build_image
+    type                        = "LINUX_CONTAINER"
+    image_pull_credentials_type = "CODEBUILD"
+  }
+
+  artifacts {
+    type = "CODEPIPELINE"
+  }
+}
+
+resource "aws_codebuild_project" "deploy_project" {
+  name          = format("%s-deploy-project", var.application_name)
   service_role  = aws_iam_role.codebuild_role.arn
   build_timeout = "5"
 
@@ -151,17 +190,12 @@ resource "aws_codebuild_project" "codebuild_project" {
     image_pull_credentials_type = "CODEBUILD"
 
     environment_variable {
-      name  = "ARTIFACT_S3_BUCKET"
-      value = data.aws_s3_bucket.artifacts_s3_bucket.bucket
-    }
-    environment_variable {
-      name  = "ARTIFACT_S3_KEY"
-      value = var.application_name
+      name  = "TERRAFORM_ROLE"
+      value = aws_iam_role.codebuild_role.arn
     }
   }
 
   artifacts {
-    name = var.application_name
     type = "CODEPIPELINE"
   }
 }
@@ -269,22 +303,7 @@ resource "aws_iam_role_policy" "codebuild_policy" {
     {
       "Effect": "Allow",
       "Resource": [ "*" ],
-      "Action": [
-          "logs:CreateLogGroup",
-          "logs:CreateLogStream",
-          "logs:PutLogEvents"
-      ]
-    },
-    {
-      "Effect": "Allow",
-      "Resource": [
-          "${data.aws_s3_bucket.artifacts_s3_bucket.arn}/${var.application_name}/*"
-      ],
-      "Action": [
-          "s3:GetObject",
-          "s3:GetObjectVersion",
-          "s3:PutObject"
-      ]
+      "Action": ["*"]
     }
   ]
 }
